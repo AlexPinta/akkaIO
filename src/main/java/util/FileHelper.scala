@@ -1,48 +1,63 @@
 package util
 
-import akka.actor._
-import akka.pattern.AskableActorSelection
-import akka.util.Timeout
-import util.Message.{GetResult, Finish, Start, ProcessLine}
+import java.io._
+import java.nio.channels.WritableByteChannel
 
-import scala.concurrent.Await
+import akka.actor._
+import akka.stream.scaladsl.FileIO
+import service.ActorService
+import util.Message._
+import scala.io.Source
+import scalax.io.Resource
+import scalax.io.managed.{WriterResource, WritableByteChannelResource, OutputStreamResource}
 
 /**
  */
 object Message {
   case object Start
   case object Finish
-  case class ProcessLine(line: Array[String])
+  case class AccumulateAmount(line: Double)
   case object GetResult
+  case class RetrieveData(data: FileHelperWorker)
 }
 
 class FileHelper extends Actor {
-  def readFile(/*paths: Paths*/): Unit = {
-    scala.io.Source.fromFile(getClass.getClassLoader.getResource("./data.txt").getFile)
+  def readFile(): Unit = {
+    Source.fromFile(getClass.getClassLoader.getResource("./data.txt").getFile)
       .getLines.foreach(line => {
-        val lineFields = line.split(";")
+        val lineFields = if(line.isEmpty) new Array[String](0) else line.split(";")
         if (lineFields.nonEmpty) {
-          val actorId = "worker-"+lineFields(0)
-          val sel = context.system.actorSelection("akka://ProcessingFiles/user/fileReader/"+actorId)
-          val asker = new AskableActorSelection(sel).ask(new Identify(actorId))
-          var ref
-          try {
-            val ident = Await.result(asker, new Timeout(3000).duration())
-            ref = ident.getRef();
-          } catch (Exception e) {
-          }
-          val worker = context.system.actorOf(Props(new FileHelperWorker(self)), name = "worker"+lineFields(0))
-          worker ! ProcessLine(lineFields)
+          implicit val supervisor = this
+          val worker = ActorService.getActor("akka://ProcessingFiles/user/", "worker-", lineFields(0))
+          worker ! AccumulateAmount(lineFields(1).toDouble)
+
         }
       })
       context.system.actorSelection("akka://ProcessingFiles/user/*") ! GetResult
+  }
+
+  def writeDataToFile(data: FileHelperWorker): Unit = {
 
 
-//    val foreach: Future[IOResult] = FileIO.fromPath(file)
-//      .withAttributes(ActorAttributes.dispatcher("custom-blocking-io-dispatcher"))
-//      .to(Sink.ignore)
-//      .run()
-//
+    val outputStream: FileOutputStream = new FileOutputStream(getClass.getClassLoader.getResource("./result.txt").getFile)
+
+    val out: OutputStreamResource[OutputStream] = Resource.fromOutputStream(outputStream)
+
+    // Convert the output resource to a Resource based on a WritableByteChannel.  The Resource extends Output Trait
+    val writableChannel: WritableByteChannelResource[WritableByteChannel] = out.writableByteChannel
+
+    // Convert the output resource to a WriterResource which extends the WriteChars Trait and is based on a Writer
+    val writer: WriterResource[Writer] = out.writer
+
+//    val out = Source.fromFile(getClass.getClassLoader.getResource("./result.txt").getFile)
+
+    //    data.
+//    FileIO.toPath(getClass.getClassLoader.getResource("./result.txt").getFile, )
+
+//    val file = new File(getClass.getClassLoader.getResource("./result.txt").getFile)
+//    val bw = new BufferedWriter(new FileWriter(file))
+//    bw.write("").
+//    bw.close()
   }
 
 
@@ -53,27 +68,10 @@ class FileHelper extends Actor {
 
   def receive = {
     case Start => readFile()
-    case Finish => context.system.terminate()
-    case _ => println("Unknown message!")
-  }
-
-
-
-//  val file = new File("example.csv")
-//
-//  SynchronousFileSource(file)
-//    .runForeach((chunk: ByteString) ⇒ handle(chunk))
-//
-//  implicit val dispatcher = context.dispatcher
-//
-//  val file = FileIO.open("myFile.data")
-//  // read 200 bytes from the beginning of the file
-//  val readResultFuture = file.read(0,200)
-//
-//  // do stuff with the future
-//  readResultFuture.onSuccess({
-//    case bytes:ByteString=>{
-//      println(bytes.utf8String)
+    case RetrieveData(data) => { println("AMOUNT " + data.getAccount() + " - " + data.getAmount()) }
+//    case Finish => context.system.terminate()
+//    case _ => {
+//      println("Unknown message!")
 //    }
-//  }).andThen{ case _ => file.close()} // Close when we're done reading
+  }
 }
